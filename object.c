@@ -170,3 +170,50 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
         fclose(f);
         return -1;
     }
+    fclose(f);
+
+    // 4. Verify integrity
+    ObjectID actual_id;
+    compute_hash(full_obj, file_size, &actual_id);
+    if (memcmp(id->hash, actual_id.hash, HASH_SIZE) != 0) {
+        free(full_obj);
+        return -1;
+    }
+
+    // 3. Parse the header
+    char *header = (char *)full_obj;
+    char *null_ptr = memchr(header, '\0', file_size);
+    if (!null_ptr) {
+        free(full_obj);
+        return -1;
+    }
+
+    char type_str[16];
+    size_t size;
+    if (sscanf(header, "%15s %zu", type_str, &size) != 2) {
+        free(full_obj);
+        return -1;
+    }
+
+    // 5. Set *type_out
+    if (strcmp(type_str, "blob") == 0) *type_out = OBJ_BLOB;
+    else if (strcmp(type_str, "tree") == 0) *type_out = OBJ_TREE;
+    else if (strcmp(type_str, "commit") == 0) *type_out = OBJ_COMMIT;
+    else {
+        free(full_obj);
+        return -1;
+    }
+
+    // 6. Allocate buffer and copy data
+    *len_out = size;
+    *data_out = malloc(size);
+    if (!*data_out) {
+        free(full_obj);
+        return -1;
+    }
+
+    memcpy(*data_out, null_ptr + 1, size);
+    free(full_obj);
+
+    return 0;
+}
