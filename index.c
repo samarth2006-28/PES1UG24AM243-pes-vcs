@@ -142,3 +142,51 @@ int index_load(Index *index) {
             break;
         }
         hex_to_hash(hex, &e->hash);
+        index->count++;
+    }
+    fclose(f);
+    return 0;
+}
+
+// Helper for sorting index entries by path
+static int compare_index_entries(const void *a, const void *b) {
+    return strcmp(((const IndexEntry *)a)->path, ((const IndexEntry *)b)->path);
+}
+
+// Save the index to .pes/index atomically.
+int index_save(const Index *index) {
+    // 1. Create a copy and sort entries by path (Git requirement)
+    Index sorted = *index;
+    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
+
+    // 2. Write to a temporary file
+    char temp_path[512];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp", INDEX_FILE);
+    FILE *f = fopen(temp_path, "w");
+    if (!f) return -1;
+
+    for (int i = 0; i < sorted.count; i++) {
+        const IndexEntry *e = &sorted.entries[i];
+        char hex[HASH_HEX_SIZE + 1];
+        hash_to_hex(&e->hash, hex);
+        fprintf(f, "%o %s %" PRIu64 " %u %s\n", e->mode, hex, e->mtime_sec, e->size, e->path);
+    }
+
+    // 3. atomic sync: fflush -> fsync -> fclose -> rename
+    fflush(f);
+    fsync(fileno(f));
+    fclose(f);
+
+    if (rename(temp_path, INDEX_FILE) < 0) {
+        unlink(temp_path);
+        return -1;
+    }
+
+    return 0;
+}
+
+// Stage a file for the next commit.
+int index_add(Index *index, const char *path) {
+    // 1. Get file metadata
+    struct stat st;
+    if (stat(path, &st) != 0) {
