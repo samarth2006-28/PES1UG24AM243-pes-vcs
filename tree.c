@@ -15,6 +15,10 @@
 #include <string.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include "pes.h"
+
+// Forward declaration
+int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out);
 #include "index.h"
 
 // ─── Mode Constants ─────────────────────────────────────────────────────────
@@ -65,7 +69,7 @@ int tree_parse(const void *data, size_t len, Tree *tree_out) {
         size_t name_len = null_byte - ptr;
         if (name_len >= sizeof(entry->name)) return -1;
         memcpy(entry->name, ptr, name_len);
-        entry->name[name_len] = '\0'; // Ensure null-terminated
+        entry->name[name_len] = '\0';
 
         ptr = null_byte + 1; // Skip null byte
 
@@ -84,28 +88,29 @@ static int compare_tree_entries(const void *a, const void *b) {
     return strcmp(((const TreeEntry *)a)->name, ((const TreeEntry *)b)->name);
 }
 
+// Helper for sorting tree pointers
+static int compare_tree_ptrs(const void *a, const void *b) {
+    return strcmp((*(const TreeEntry **)a)->name, (*(const TreeEntry **)b)->name);
+}
+
 // Serialize a Tree struct into binary format for storage.
-// Caller must free(*data_out).
-// Returns 0 on success, -1 on error.
 int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
-    // Estimate max size: (6 bytes mode + 1 byte space + 256 bytes name + 1 byte null + 32 bytes hash) per entry
-    size_t max_size = tree->count * 296; 
+    size_t max_size = tree->count * 600; 
     uint8_t *buffer = malloc(max_size);
     if (!buffer) return -1;
 
-    // Create a mutable copy to sort entries (Git requirement)
-    Tree sorted_tree = *tree;
-    qsort(sorted_tree.entries, sorted_tree.count, sizeof(TreeEntry), compare_tree_entries);
+    // 1. Sort using pointers to avoid stack overflow
+    const TreeEntry *ptrs[MAX_TREE_ENTRIES];
+    for (int i = 0; i < tree->count; i++) {
+        ptrs[i] = &tree->entries[i];
+    }
+    qsort(ptrs, tree->count, sizeof(TreeEntry *), compare_tree_ptrs);
 
     size_t offset = 0;
-    for (int i = 0; i < sorted_tree.count; i++) {
-        const TreeEntry *entry = &sorted_tree.entries[i];
-        
-        // Write mode and name (%o writes octal correctly for Git standards)
+    for (int i = 0; i < tree->count; i++) {
+        const TreeEntry *entry = ptrs[i];
         int written = sprintf((char *)buffer + offset, "%o %s", entry->mode, entry->name);
-        offset += written + 1; // +1 to step over the null terminator written by sprintf
-        
-        // Write binary hash
+        offset += written + 1;
         memcpy(buffer + offset, entry->hash.hash, HASH_SIZE);
         offset += HASH_SIZE;
     }
@@ -161,7 +166,7 @@ static int write_tree_recursive(IndexEntry **entries, int count, int depth, Obje
                     cc = strchr(cc, '/');
                     if (cc) cc++;
                 }
-                if (cc && strncmp(cc, dir_name, dir_len) == 0 && cc[dir_len] == '/') {
+                if (cc && strncmp(cc, dir_name, dir_len) == 0 && (cc[dir_len] == '/' || cc[dir_len] == '\0')) {
                     i++;
                 } else {
                     break;

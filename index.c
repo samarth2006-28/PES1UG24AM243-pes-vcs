@@ -148,16 +148,19 @@ int index_load(Index *index) {
     return 0;
 }
 
-// Helper for sorting index entries by path
-static int compare_index_entries(const void *a, const void *b) {
-    return strcmp(((const IndexEntry *)a)->path, ((const IndexEntry *)b)->path);
+// Helper for sorting index pointers by path
+static int compare_index_ptrs(const void *a, const void *b) {
+    return strcmp((*(const IndexEntry **)a)->path, (*(const IndexEntry **)b)->path);
 }
 
 // Save the index to .pes/index atomically.
 int index_save(const Index *index) {
-    // 1. Create a copy and sort entries by path (Git requirement)
-    Index sorted = *index;
-    qsort(sorted.entries, sorted.count, sizeof(IndexEntry), compare_index_entries);
+    // 1. Sort using pointers to avoid stack overflow with 5.6MB struct
+    const IndexEntry *ptrs[MAX_INDEX_ENTRIES];
+    for (int i = 0; i < index->count; i++) {
+        ptrs[i] = &index->entries[i];
+    }
+    qsort(ptrs, index->count, sizeof(IndexEntry *), compare_index_ptrs);
 
     // 2. Write to a temporary file
     char temp_path[512];
@@ -165,8 +168,8 @@ int index_save(const Index *index) {
     FILE *f = fopen(temp_path, "w");
     if (!f) return -1;
 
-    for (int i = 0; i < sorted.count; i++) {
-        const IndexEntry *e = &sorted.entries[i];
+    for (int i = 0; i < index->count; i++) {
+        const IndexEntry *e = ptrs[i];
         char hex[HASH_HEX_SIZE + 1];
         hash_to_hex(&e->hash, hex);
         fprintf(f, "%o %s %" PRIu64 " %u %s\n", e->mode, hex, e->mtime_sec, e->size, e->path);
