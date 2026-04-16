@@ -166,3 +166,45 @@ static int write_tree_recursive(IndexEntry **entries, int count, int depth, Obje
                 } else {
                     break;
                 }
+            }
+            
+            ObjectID sub_hash;
+            if (write_tree_recursive(&entries[start], i - start, depth + 1, &sub_hash) < 0) {
+                return -1;
+            }
+            
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            TreeEntry *te = &tree.entries[tree.count++];
+            te->mode = MODE_DIR;
+            te->hash = sub_hash;
+            strncpy(te->name, dir_name, sizeof(te->name)-1);
+            te->name[sizeof(te->name)-1] = '\0';
+        }
+    }
+
+    void *data;
+    size_t len;
+    if (tree_serialize(&tree, &data, &len) < 0) return -1;
+    if (object_write(OBJ_TREE, data, len, id_out) < 0) {
+        free(data);
+        return -1;
+    }
+    free(data);
+    return 0;
+}
+
+// Build a tree hierarchy from the current index and write all tree
+// objects to the object store.
+int tree_from_index(ObjectID *id_out) {
+    Index index;
+    if (index_load(&index) < 0) return -1;
+    if (index.count == 0) return -1;
+
+    // Index is already sorted by path in index_save
+    IndexEntry *ptr_entries[MAX_INDEX_ENTRIES];
+    for (int i = 0; i < index.count; i++) {
+        ptr_entries[i] = &index.entries[i];
+    }
+    
+    return write_tree_recursive(ptr_entries, index.count, 0, id_out);
+}
