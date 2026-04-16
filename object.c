@@ -127,3 +127,46 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     if (rename(temp_path, path) < 0) {
         unlink(temp_path);
         free(full_obj);
+        return -1;
+    }
+
+    // 9. Open and fsync() the shard directory
+    int dfd = open(shard_dir, O_RDONLY);
+    if (dfd >= 0) {
+        fsync(dfd);
+        close(dfd);
+    }
+
+    free(full_obj);
+    return 0;
+}
+
+// The caller is responsible for calling free(*data_out).
+// Returns 0 on success, -1 on error (file not found, corrupt, etc.).
+int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
+    char path[512];
+    object_path(id, path, sizeof(path));
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size < 0) {
+        fclose(f);
+        return -1;
+    }
+
+    void *full_obj = malloc(file_size);
+    if (!full_obj) {
+        fclose(f);
+        return -1;
+    }
+
+    if (fread(full_obj, 1, file_size, f) != (size_t)file_size) {
+        free(full_obj);
+        fclose(f);
+        return -1;
+    }
