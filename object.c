@@ -84,3 +84,46 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     memcpy((uint8_t *)full_obj + header_len, data, len);
 
     // 3. Compute SHA-256 hash of the FULL object (header + data)
+    compute_hash(full_obj, full_len, id_out);
+
+    // 4. Check if object already exists (deduplication)
+    if (object_exists(id_out)) {
+        free(full_obj);
+        return 0;
+    }
+
+    // 5. Get path and create shard directory
+    char path[512];
+    object_path(id_out, path, sizeof(path));
+    
+    char shard_dir[512];
+    char hex[HASH_HEX_SIZE + 1];
+    hash_to_hex(id_out, hex);
+    snprintf(shard_dir, sizeof(shard_dir), "%s/%.2s", OBJECTS_DIR, hex);
+    mkdir(shard_dir, 0755);
+
+    // 6. Write to a temporary file
+    char temp_path[1024];
+    snprintf(temp_path, sizeof(temp_path), "%s.tmp.%d", path, getpid());
+    
+    int fd = open(temp_path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(full_obj);
+        return -1;
+    }
+
+    if (write(fd, full_obj, full_len) != (ssize_t)full_len) {
+        close(fd);
+        unlink(temp_path);
+        free(full_obj);
+        return -1;
+    }
+
+    // 7. fsync() the temporary file
+    fsync(fd);
+    close(fd);
+
+    // 8. rename() the temp file to the final path
+    if (rename(temp_path, path) < 0) {
+        unlink(temp_path);
+        free(full_obj);
