@@ -94,3 +94,51 @@ int index_status(const Index *index) {
     if (dir) {
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
+            // Skip hidden directories, parent directories, and build artifacts
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+            if (strcmp(ent->d_name, ".pes") == 0) continue;
+            if (strcmp(ent->d_name, "pes") == 0) continue; // compiled executable
+            if (strstr(ent->d_name, ".o") != NULL) continue; // object files
+
+            // Check if file is tracked in the index
+            int is_tracked = 0;
+            for (int i = 0; i < index->count; i++) {
+                if (strcmp(index->entries[i].path, ent->d_name) == 0) {
+                    is_tracked = 1; 
+                    break;
+                }
+            }
+            
+            if (!is_tracked) {
+                struct stat st;
+                stat(ent->d_name, &st);
+                if (S_ISREG(st.st_mode)) { // Only list regular files for simplicity
+                    printf("  untracked:  %s\n", ent->d_name);
+                    untracked_count++;
+                }
+            }
+        }
+        closedir(dir);
+    }
+    if (untracked_count == 0) printf("  (nothing to show)\n");
+    printf("\n");
+
+    return 0;
+}
+
+// ─── IMPLEMENTED ───────────────────────────────────────────────────────────
+
+// Load the index from .pes/index.
+int index_load(Index *index) {
+    index->count = 0;
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return 0; // Not an error if file doesn't exist
+
+    char hex[HASH_HEX_SIZE + 1];
+    while (index->count < MAX_INDEX_ENTRIES) {
+        IndexEntry *e = &index->entries[index->count];
+        // Read mode, hex-hash, mtime, size, and finally the path
+        if (fscanf(f, "%o %64s %" PRIu64 " %u %[^\n]", &e->mode, hex, &e->mtime_sec, &e->size, e->path) != 5) {
+            break;
+        }
+        hex_to_hash(hex, &e->hash);
