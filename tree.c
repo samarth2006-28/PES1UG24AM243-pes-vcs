@@ -124,3 +124,45 @@ static int write_tree_recursive(IndexEntry **entries, int count, int depth, Obje
         const char *path = entries[i]->path;
         
         // Find current component at this depth
+        const char *current_comp = path;
+        for (int d = 0; d < depth; d++) {
+            current_comp = strchr(current_comp, '/');
+            if (current_comp) current_comp++;
+            else break;
+        }
+        
+        if (!current_comp) { i++; continue; }
+
+        const char *next_slash = strchr(current_comp, '/');
+        
+        if (next_slash == NULL) {
+            // It's a file
+            if (tree.count >= MAX_TREE_ENTRIES) return -1;
+            TreeEntry *te = &tree.entries[tree.count++];
+            te->mode = entries[i]->mode;
+            te->hash = entries[i]->hash;
+            strncpy(te->name, current_comp, sizeof(te->name)-1);
+            te->name[sizeof(te->name)-1] = '\0';
+            i++;
+        } else {
+            // It's a directory
+            char dir_name[256];
+            size_t dir_len = next_slash - current_comp;
+            if (dir_len >= sizeof(dir_name)) dir_len = sizeof(dir_name) - 1;
+            memcpy(dir_name, current_comp, dir_len);
+            dir_name[dir_len] = '\0';
+            
+            // Group entries under this directory
+            int start = i;
+            while (i < count) {
+                const char *p = entries[i]->path;
+                const char *cc = p;
+                for (int d = 0; d < depth; d++) {
+                    cc = strchr(cc, '/');
+                    if (cc) cc++;
+                }
+                if (cc && strncmp(cc, dir_name, dir_len) == 0 && cc[dir_len] == '/') {
+                    i++;
+                } else {
+                    break;
+                }
